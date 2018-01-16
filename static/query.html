@@ -1,0 +1,308 @@
+<html>
+  <head>
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script>
+      const ENABLE_PAGING = true;
+      const PAGE_SIZE = 30;
+      const DATA_CAP = 1000; // plot maximum this much data points
+      const chartDivID = 'chart_div';
+      var chart = null;
+      var chartEditor = null;
+      var chartData = null;
+
+
+      google.charts.load('current', {packages:['corechart', 'table', 'calendar', 'timeline', 'charteditor']}); // load api lib
+      google.charts.setOnLoadCallback(init); //draw a sample table
+
+      document.addEventListener('DOMContentLoaded', function() {
+        generateSampleQuery();
+      });
+
+      function init() {
+      	chartEditor = new google.visualization.ChartEditor();
+				google.visualization.events.addListener(chartEditor, 'ok', redrawChart);
+				sendQuery();
+      }
+
+      /** send the query to server */
+      function sendQuery(q) {
+        q = q || 'select * from LOG limit 5';
+        var ajax = new XMLHttpRequest();
+        ajax.onreadystatechange = handleQueryResponse;
+        ajax.open('POST', '/query', true);
+        ajax.setRequestHeader('content-type', 'application/json;charset=UTF-8');
+        ajax.send(JSON.stringify({query: q}));
+        disableQueryButton(true);
+        disableEditChartButton(true);
+      }
+
+      /**
+      * handle query response from server
+      * display error message or plot chart when needed
+      */
+      function handleQueryResponse() {
+      	if (this.readyState != 4) return;
+        if (this.status != 200) {
+          setErrorMessage('Error: ' + this.statusText || this.responseText);
+          setChartText('');
+          chartData = null;
+        }
+        else {
+          setErrorMessage('');
+          var data = JSON.parse(this.responseText);
+          chartData = JSON.stringify(JSON.parse(this.responseText), null, 2);
+          if ('error' in data) {
+          	if (typeof data.error == 'string') {
+							setErrorMessage('Error: ' + data.error.replace(/\n/g, '<br>'));
+
+						}
+						else {
+						  setErrorMessage('Error: ' + data.error.code);
+						}
+          	setChartText('');
+					}
+					else if (data.length == 1 && data[0].length == 0) {
+          	setChartText('The result is empty');
+					}
+					else {
+						if (data[0].length < 5) {
+							data = detectDate(data);
+						}
+						data = google.visualization.arrayToDataTable(data);
+						chart = new google.visualization.ChartWrapper();
+						chart.setContainerId(chartDivID);
+						chart.setDataTable(data);
+						detectChartType(data, chart);
+						chart.draw();
+						disableEditChartButton(false);
+					}
+        }
+        disableQueryButton(false);
+      }
+
+      function redrawChart(){
+      	var wrapper = chartEditor.getChartWrapper();
+      	wrapper.setOption('width', 1000);
+      	wrapper.setOption('height', 'auto');
+				wrapper.draw();
+			}
+
+      /** @param {object}table a 2D list, must have a project column
+			* @return {object} new table with date/datetime column converted to type date to use in google chart
+			*/
+			function detectDate(table) {
+				if (!table || !table.length) return undefined;
+				var header = [];
+				var dateColList = [];
+				for (var i = 0; i < table[0].length; i++) {
+					if (table[0][i].toLowerCase().indexOf('date') >=0)
+					{
+						header.push({label: table[0][i], type: 'date'});
+						dateColList.push(i);
+					}
+					else {
+						header.push(table[0][i]);
+					}
+				}
+
+				var result = [header];
+				for (var i = 1; i < table.length; i++) {
+					var newrow = table[i].slice();
+					dateColList.forEach(function(index) {
+						if (newrow[index]) {
+							newrow[index] = new Date(newrow[index]);
+						}
+					});
+					result.push(newrow);
+				}
+				return result;
+			}
+
+      /**
+      * analyze input data and set correct chart type
+      * @param {DataTable}data the data table of the chart
+      * @param {ChartWrapper}chart the chart to set type
+      */
+      function detectChartType(data, chart) {
+        if (!data || !chart) {
+          throw "Invalid input param in detectChartType.";
+        }
+
+        var colCount = data.getNumberOfColumns();
+        var dataType = {};
+        var options = {
+          // 'title':'My chart'
+          //,'width':'1200'
+          //,'height':'600'
+        };
+        var view = new google.visualization.DataView(data);
+
+        //push all data types in data table into dataType object
+        for (var i = 0; i < colCount; i++) {
+          var type = data.getColumnType(i);
+          if (dataType[type] == undefined) dataType[type] = [];
+          dataType[type].push(i);
+        }
+
+        if (colCount == 2) {
+          if ('number' in dataType) {
+            if ('string' in dataType) {
+              if (dataType['string'][0] != 0) {
+                view.setColumns([1, 0]);
+              }
+              chart.setChartType('ColumnChart');
+            }
+            else if ('datetime' in dataType || 'date' in dataType) {
+              chart.setChartType('Calendar');
+              if (('datetime' in dataType && dataType['datetime'][0] != 0)
+                  || ('date' in dataType && dataType['date'][0] != 0))
+              {
+                view.setColumns([1, 0]);
+              }
+            }
+            else if (dataType['number'].length == 2) {
+              chart.setChartType('ColumnChart');
+            }
+          }
+        } // if (colCount == 2)
+        else if (colCount > 2 && 'string' in dataType && dataType['string'].length == 1) {
+          //count number of data type
+          var typeCount = 0;
+          for (var type in dataType) {
+            typeCount++;
+          }
+
+          if (typeCount < 3) {
+            // change column order so that string column is the first
+            var columns = [dataType['string'][0]];
+            for (var i = 0; i < colCount; i++) {
+              if (i != dataType['string'][0]) columns.push(i);
+            }
+            view.setColumns(columns);
+
+            if ('number' in dataType) {
+              options.isStacked = colCount > 4;
+              chart.setChartType('ColumnChart');
+            }
+            else if ('date' in dataType || 'dateTime' in dataType) {
+              chart.setChartType('Timeline');
+            }
+          }
+        } // else if (colCount > 2)
+
+        if (!chart.getChartType()) {
+          chart.setChartType('Table');
+          if (ENABLE_PAGING && data.getNumberOfRows() > PAGE_SIZE) {
+            options.page = ENABLE_PAGING;
+            options.pageSize = PAGE_SIZE;
+          }
+          options.allowHtml = true;
+          options.alternatingRowStyle = true;
+          options.cssClassNames = {tableRow: 'tableRow'};
+        }
+        else {
+          options.height = '600';
+          if (data.getNumberOfRows() > DATA_CAP && chart.getChartType() != 'Calendar' && chart.getChartType() != 'Timeline')
+            view.hideRows(DATA_CAP, data.getNumberOfRows() - 1);
+        }
+        chart.setOptions(options);
+        chart.setView(view.toJSON());
+      }
+
+      function disableQueryButton(disable) {
+        document.getElementById('query_button')
+                .disabled = disable === false ? false : true;
+      }
+
+      function disableEditChartButton(disable) {
+        document.getElementById('chart_editor')
+                .disabled = disable === false ? false : true;
+        document.getElementById('download_data')
+                .disabled = disable === false ? false : true;
+      }
+
+      function setErrorMessage(msg) {
+        document.getElementById('error_message').innerHTML = msg;
+      }
+
+      /** replace the chart with a text */
+      function setChartText(msg) {
+        document.getElementById("chart_div").innerHTML = msg;
+      }
+
+      function generateSampleQuery() {
+        const sampleQuery = {
+        	"show sample data": "select * from LOG limit 5"
+        };
+        var html = '<option value=""></option>';
+        for (var query in sampleQuery) {
+          html += '\n<option value="' + sampleQuery[query] + '">' + query + '</option>';
+        }
+        document.getElementById('sample_query_combo').innerHTML = html;
+      }
+
+      function setSampleQuery() {
+        document.getElementById('query').value = document.getElementById('sample_query_combo').value;
+      }
+
+      function downloadText(text, filename) {
+        var file = new Blob([text], {type: 'text'});
+        if (window.navigator.msSaveOrOpenBlob) // IE10+
+          window.navigator.msSaveOrOpenBlob(file, filename);
+        else { // Others
+          var a = document.createElement("a"),
+              url = URL.createObjectURL(file);
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function() {
+              document.body.removeChild(a);
+              window.URL.revokeObjectURL(url);
+          }, 0);
+        }
+      }
+
+      function downloadChartData() {
+        downloadText(chartData, 'chartData.txt');
+      }
+
+    </script>
+    <style>
+    	table {
+    		white-space: pre-wrap;
+    	}
+      .tableRow {
+        font-family: Roboto, Arial, Tahoma, Ubuntu;
+      }
+    </style>
+    <title>Query Data</title>
+  </head>
+  <body>
+    <div style='clear:both;'>
+      <form id='form_query' style='padding:5px;margin:10px;max-width:1000px;float:left;'>
+        <span style='float:left'>Query</span>
+        <a href='http://www.sqlitetutorial.net' target='_blank' style='float:right;'>Syntax Help</a>
+        <br>
+        <textarea id='query' rows='4' cols='80' maxlength='20000' style='margin:5px;padding:5px;'></textarea>
+        <br>
+        <input id='query_button' type='button' value='Run' style='width:80px;font-size:large;padding:5px;margin:5px;float:right;'
+               onclick='sendQuery(document.getElementById("query").value)' disabled>
+        <br>
+        <label id='error_message' style='color:red;margin:5px;padding:5px;'></label>
+      </form>
+      <div id='sample_query' style='padding:5px;margin:10px;margin-left:30px;min-width:300px;float:left;'>
+        <span>Sample queries</span>
+        <br>
+        <select id='sample_query_combo' style='font-size:large;padding:5px;margin:5px;' onChange='setSampleQuery()'></select>
+      </div>
+    </div>
+    <div id='charts' style='clear:both;'>
+    	<input id='chart_editor' type='button' value='Edit Chart' onclick='chartEditor.openDialog(chart, {})'
+    	       style='width:80px;font-size:large;padding:5px;margin-bottom:10px;' disabled>
+      <input id='download_data' type='button' value='Download Data' onclick='downloadChartData()'
+   	        style='font-size:large;padding:5px;margin-bottom:10px;margin-left:10px;' disabled>
+      <div id='chart_div'>Loading sample data...</div>
+    </div>
+</body>
+</html>
