@@ -11,8 +11,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node main.js",
-    "initdb": "node parser.js initdb",
-    "updatedb": "node parser.js updatedb"
+    "scripts": {
+      "initdb": "node parser.js initdb",
+      "updatedb": "node parser.js updatedb"
+    }
   },
   "author": "Triet",
   "license": "ISC"
